@@ -1,6 +1,6 @@
 import vm from "node:vm";
 import type { Browser, Page } from "playwright-core";
-import { expect } from "@playwright/test";
+import { expect } from "@/lib/expect";
 import type { TestCase, TestResult } from "@/lib/types";
 
 const PER_TEST_TIMEOUT_MS = 20000;
