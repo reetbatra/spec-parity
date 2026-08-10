@@ -67,9 +67,7 @@ async function runOne(browser: Browser, baseUrl: string, testCase: TestCase): Pr
   }
 }
 
-export async function runTestCases(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
-  if (testCases.length === 0) return [];
-
+async function attemptRun(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
   console.log("[playwright-runner] launching browser for", testCases.length, "test case(s)");
   const browser = await launchBrowser();
   try {
@@ -80,7 +78,24 @@ export async function runTestCases(baseUrl: string, testCases: TestCase[]): Prom
     return results;
   } finally {
     console.log("[playwright-runner] closing browser");
-    await browser.close();
+    await browser.close().catch((err) => console.log("[playwright-runner] browser.close() error (ignored):", err));
     console.log("[playwright-runner] browser closed");
+  }
+}
+
+/**
+ * @sparticuz/chromium occasionally crashes moments after launch on a reused
+ * (warm) Vercel function instance -- the CDP connection is established but
+ * the process dies before the first command runs. A fresh browser launch on
+ * retry reliably recovers; see README "what broke" for how this was isolated.
+ */
+export async function runTestCases(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
+  if (testCases.length === 0) return [];
+
+  try {
+    return await attemptRun(baseUrl, testCases);
+  } catch (err) {
+    console.log("[playwright-runner] first attempt crashed, retrying with a fresh browser:", err);
+    return await attemptRun(baseUrl, testCases);
   }
 }
