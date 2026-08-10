@@ -4,6 +4,20 @@ import { expect } from "@/lib/expect";
 import type { TestCase, TestResult } from "@/lib/types";
 
 const PER_TEST_TIMEOUT_MS = 20000;
+const LAUNCH_TIMEOUT_MS = 25000;
+const ATTEMPT_TIMEOUT_MS = 45000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 async function launchBrowser(): Promise<Browser> {
   if (process.env.VERCEL) {
@@ -69,7 +83,7 @@ async function runOne(browser: Browser, baseUrl: string, testCase: TestCase): Pr
 
 async function attemptRun(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
   console.log("[playwright-runner] launching browser for", testCases.length, "test case(s)");
-  const browser = await launchBrowser();
+  const browser = await withTimeout(launchBrowser(), LAUNCH_TIMEOUT_MS, "browser launch");
   try {
     const results: TestResult[] = [];
     for (const testCase of testCases) {
@@ -93,9 +107,9 @@ export async function runTestCases(baseUrl: string, testCases: TestCase[]): Prom
   if (testCases.length === 0) return [];
 
   try {
-    return await attemptRun(baseUrl, testCases);
+    return await withTimeout(attemptRun(baseUrl, testCases), ATTEMPT_TIMEOUT_MS, "execution attempt");
   } catch (err) {
-    console.log("[playwright-runner] first attempt crashed, retrying with a fresh browser:", err);
-    return await attemptRun(baseUrl, testCases);
+    console.log("[playwright-runner] first attempt crashed or hung, retrying with a fresh browser:", err);
+    return await withTimeout(attemptRun(baseUrl, testCases), ATTEMPT_TIMEOUT_MS, "execution attempt (retry)");
   }
 }
