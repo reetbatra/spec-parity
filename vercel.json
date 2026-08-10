@@ -1,7 +1,7 @@
 {
   "functions": {
     "src/app/api/execute/route.ts": {
-      "memory": 3009,
+      "memory": 2048,
       "maxDuration": 120
     }
   }
