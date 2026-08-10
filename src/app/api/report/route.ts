@@ -5,7 +5,7 @@ import { buildReport } from "@/lib/scoring";
 import type { Requirement, TestResult, SuggestedFix } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 const fixSchema = z.object({
   requirementId: z.string(),

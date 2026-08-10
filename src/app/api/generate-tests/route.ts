@@ -4,7 +4,7 @@ import { generateStructured } from "@/lib/deepseek";
 import type { Requirement } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 const testCaseSchema = z.object({
   requirementId: z.string(),

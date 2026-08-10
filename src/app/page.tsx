@@ -61,6 +61,17 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+
+    const isJson = res.headers.get("content-type")?.includes("application/json");
+    if (!isJson) {
+      const text = await res.text();
+      throw new Error(
+        `${url} returned a non-JSON response (HTTP ${res.status}). This usually means the request timed out upstream — try again.${
+          text ? ` Details: ${text.slice(0, 200)}` : ""
+        }`,
+      );
+    }
+
     const json = await res.json();
     if (!res.ok) {
       throw new Error(json?.error ?? `${url} failed with ${res.status}`);

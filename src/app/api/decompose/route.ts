@@ -3,7 +3,7 @@ import { z } from "zod";
 import { generateStructured } from "@/lib/deepseek";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 const requirementSchema = z.object({
   id: z.string(),
