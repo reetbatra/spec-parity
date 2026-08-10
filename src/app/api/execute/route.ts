@@ -3,7 +3,7 @@ import type { TestCase } from "@/lib/types";
 import { runTestCases } from "@/lib/playwright-runner";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 280;
 
 export async function POST(request: Request) {
   const body = await request.json();

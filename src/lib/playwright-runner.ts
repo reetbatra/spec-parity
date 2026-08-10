@@ -4,8 +4,7 @@ import { expect } from "@/lib/expect";
 import type { TestCase, TestResult } from "@/lib/types";
 
 const PER_TEST_TIMEOUT_MS = 20000;
-const LAUNCH_TIMEOUT_MS = 25000;
-const ATTEMPT_TIMEOUT_MS = 45000;
+const READY_TIMEOUT_MS = 15000;
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -21,24 +20,48 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
 
 async function launchBrowser(): Promise<Browser> {
   if (process.env.VERCEL) {
-    console.log("[playwright-runner] importing @sparticuz/chromium");
     const chromium = (await import("@sparticuz/chromium")).default;
-    console.log("[playwright-runner] resolving executablePath");
     const executablePath = await chromium.executablePath();
-    console.log("[playwright-runner] executablePath resolved:", executablePath);
     const { chromium: playwrightChromium } = await import("playwright-core");
-    console.log("[playwright-runner] launching browser");
-    const browser = await playwrightChromium.launch({
+    return playwrightChromium.launch({
       args: chromium.args,
       executablePath,
       headless: true,
     });
-    console.log("[playwright-runner] browser launched");
-    return browser;
   }
 
   const { chromium: playwrightChromium } = await import("playwright-core");
   return playwrightChromium.launch({ headless: true });
+}
+
+/**
+ * @sparticuz/chromium on Vercel runs Chromium in --single-process mode. A
+ * second browser context opened on an already-running instance reliably
+ * crashed the process (isolated by testing 1 vs 2 sequential test cases
+ * against an identical launch config -- the first context always worked,
+ * the second never did). Launching one browser per test case avoids the
+ * multi-context path entirely. Launch itself is still occasionally flaky
+ * (crashes moments after connecting, or hangs) on a cold Vercel instance,
+ * so this retries once with a hard per-attempt timeout before giving up.
+ */
+async function getReadyPage(baseUrl: string): Promise<{ browser: Browser; page: Page }> {
+  const attempt = async () => {
+    const browser = await launchBrowser();
+    try {
+      const context = await browser.newContext({ baseURL: baseUrl });
+      const page = await context.newPage();
+      return { browser, page };
+    } catch (err) {
+      await browser.close().catch(() => {});
+      throw err;
+    }
+  };
+
+  try {
+    return await withTimeout(attempt(), READY_TIMEOUT_MS, "browser startup");
+  } catch {
+    return await withTimeout(attempt(), READY_TIMEOUT_MS, "browser startup (retry)");
+  }
 }
 
 function compileTest(code: string): (page: Page, expectFn: typeof expect) => Promise<void> {
@@ -50,14 +73,22 @@ function compileTest(code: string): (page: Page, expectFn: typeof expect) => Pro
   return fn as (page: Page, expectFn: typeof expect) => Promise<void>;
 }
 
-async function runOne(browser: Browser, baseUrl: string, testCase: TestCase): Promise<TestResult> {
+async function runOne(baseUrl: string, testCase: TestCase): Promise<TestResult> {
   const start = Date.now();
-  console.log(`[playwright-runner] ${testCase.requirementId} newContext`);
-  const context = await browser.newContext({ baseURL: baseUrl });
-  console.log(`[playwright-runner] ${testCase.requirementId} newPage`);
-  const page = await context.newPage();
-  console.log(`[playwright-runner] ${testCase.requirementId} running test code`);
 
+  let ready: { browser: Browser; page: Page };
+  try {
+    ready = await getReadyPage(baseUrl);
+  } catch (err) {
+    return {
+      requirementId: testCase.requirementId,
+      passed: false,
+      error: `Could not start a browser to run this check: ${err instanceof Error ? err.message : String(err)}`,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  const { browser, page } = ready;
   try {
     const run = compileTest(testCase.code);
     await Promise.race([
@@ -66,10 +97,8 @@ async function runOne(browser: Browser, baseUrl: string, testCase: TestCase): Pr
         setTimeout(() => reject(new Error(`Test timed out after ${PER_TEST_TIMEOUT_MS}ms`)), PER_TEST_TIMEOUT_MS),
       ),
     ]);
-    console.log(`[playwright-runner] ${testCase.requirementId} passed in ${Date.now() - start}ms`);
     return { requirementId: testCase.requirementId, passed: true, error: null, durationMs: Date.now() - start };
   } catch (err) {
-    console.log(`[playwright-runner] ${testCase.requirementId} failed in ${Date.now() - start}ms:`, err);
     return {
       requirementId: testCase.requirementId,
       passed: false,
@@ -77,39 +106,14 @@ async function runOne(browser: Browser, baseUrl: string, testCase: TestCase): Pr
       durationMs: Date.now() - start,
     };
   } finally {
-    await context.close();
+    await browser.close().catch(() => {});
   }
 }
 
-async function attemptRun(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
-  console.log("[playwright-runner] launching browser for", testCases.length, "test case(s)");
-  const browser = await withTimeout(launchBrowser(), LAUNCH_TIMEOUT_MS, "browser launch");
-  try {
-    const results: TestResult[] = [];
-    for (const testCase of testCases) {
-      results.push(await runOne(browser, baseUrl, testCase));
-    }
-    return results;
-  } finally {
-    console.log("[playwright-runner] closing browser");
-    await browser.close().catch((err) => console.log("[playwright-runner] browser.close() error (ignored):", err));
-    console.log("[playwright-runner] browser closed");
-  }
-}
-
-/**
- * @sparticuz/chromium occasionally crashes moments after launch on a reused
- * (warm) Vercel function instance -- the CDP connection is established but
- * the process dies before the first command runs. A fresh browser launch on
- * retry reliably recovers; see README "what broke" for how this was isolated.
- */
 export async function runTestCases(baseUrl: string, testCases: TestCase[]): Promise<TestResult[]> {
-  if (testCases.length === 0) return [];
-
-  try {
-    return await withTimeout(attemptRun(baseUrl, testCases), ATTEMPT_TIMEOUT_MS, "execution attempt");
-  } catch (err) {
-    console.log("[playwright-runner] first attempt crashed or hung, retrying with a fresh browser:", err);
-    return await withTimeout(attemptRun(baseUrl, testCases), ATTEMPT_TIMEOUT_MS, "execution attempt (retry)");
+  const results: TestResult[] = [];
+  for (const testCase of testCases) {
+    results.push(await runOne(baseUrl, testCase));
   }
+  return results;
 }
